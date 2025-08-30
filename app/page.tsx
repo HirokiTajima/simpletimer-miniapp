@@ -32,7 +32,8 @@ export default function Calculator(): JSX.Element {
         e: Math.E,
       } as const;
       // mathjs の型が複雑なので any キャストで evaluate を呼ぶ
-      const res = (math as any).evaluate(expr, scope);
+      const evalMath = math.evaluate as unknown as (expression: string, scope?: Record<string, unknown>) => unknown;
+      const res = evalMath(expr, scope as Record<string, unknown>);
       setExpr(String(res));
     } catch {
       setExpr("Error");
