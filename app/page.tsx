@@ -20,7 +20,7 @@ function formatExpr(expr: string): string {
   return expr.replace(/(^|[^A-Za-z0-9_])(-?\d+(?:\.\d+)?)/g, (_: string, pre: string, num: string) => pre + addCommas(num));
 }
 
-export default function Calculator(): JSX.Element {
+export default function Calculator() {
   const [expr, setExpr] = useState<string>("");
 
   function evaluateExpression(): void {
@@ -65,7 +65,7 @@ export default function Calculator(): JSX.Element {
   };
 
   type Variant = "neutral" | "op" | "num" | "accent" | "warn";
-  const Btn = ({ children, onClick, variant = "neutral" }: { children: ReactNode; onClick: () => void; variant?: Variant; }): JSX.Element => {
+  const Btn = ({ children, onClick, variant = "neutral" }: { children: ReactNode; onClick: () => void; variant?: Variant; }) => {
     const base =
       "select-none rounded-xl py-3 text-base font-medium shadow-sm active:translate-y-px transition-colors";
     const styles: Record<Variant, string> = {
