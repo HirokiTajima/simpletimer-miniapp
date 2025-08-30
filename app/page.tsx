@@ -1,12 +1,12 @@
 "use client";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { create, all } from "mathjs";
 
-// mathjs
+// mathjs (型安全のため evaluate 時だけ any キャストを使用)
 const math = create(all, {});
 
 // --- helpers --------------------------------------------------
-function addCommas(numStr) {
+function addCommas(numStr: string): string {
   if (!/^[-+]?\d+(?:\.\d+)?$/.test(numStr)) return numStr;
   const neg = numStr.startsWith("-");
   const n = neg ? numStr.slice(1) : numStr;
@@ -14,35 +14,36 @@ function addCommas(numStr) {
   const withCommas = i.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
   return (neg ? "-" : "") + withCommas + (d ? "." + d : "");
 }
-function formatExpr(expr) {
+function formatExpr(expr: string): string {
   if (!expr) return "0";
   if (expr === "Error") return "Error";
-  return expr.replace(/(^|[^A-Za-z0-9_])(-?\d+(?:\.\d+)?)/g, (_, pre, num) => pre + addCommas(num));
+  return expr.replace(/(^|[^A-Za-z0-9_])(-?\d+(?:\.\d+)?)/g, (_: string, pre: string, num: string) => pre + addCommas(num));
 }
 
-export default function Calculator() {
-  const [expr, setExpr] = useState("");
+export default function Calculator(): JSX.Element {
+  const [expr, setExpr] = useState<string>("");
 
-  function evaluateExpression() {
+  function evaluateExpression(): void {
     try {
       const scope = {
-        ln: (x) => Math.log(x),
-        log: (x) => Math.log10(x),
+        ln: (x: number) => Math.log(x),
+        log: (x: number) => Math.log10(x),
         pi: Math.PI,
         e: Math.E,
-      };
-      const res = math.evaluate(expr, scope);
+      } as const;
+      // mathjs の型が複雑なので any キャストで evaluate を呼ぶ
+      const res = (math as any).evaluate(expr, scope);
       setExpr(String(res));
     } catch {
       setExpr("Error");
     }
   }
 
-  const push = (s) => setExpr((p) => p + s);
+  const push = (s: string) => setExpr((p) => p + s);
   const clearAll = () => setExpr("");
   const backspace = () => setExpr((p) => (p ? p.slice(0, -1) : ""));
 
-  const toggleSign = () => {
+  const toggleSign = (): void => {
     setExpr((p) => {
       const m = /(-?\d+(?:\.\d+)?)\s*$/.exec(p);
       if (!m) return p || "";
@@ -52,7 +53,7 @@ export default function Calculator() {
     });
   };
 
-  const percent = () => {
+  const percent = (): void => {
     setExpr((p) => {
       const m = /(\d+(?:\.\d+)?)\s*$/.exec(p);
       if (!m) return p || "";
@@ -62,10 +63,11 @@ export default function Calculator() {
     });
   };
 
-  const Btn = ({ children, onClick, variant = "neutral" }) => {
+  type Variant = "neutral" | "op" | "num" | "accent" | "warn";
+  const Btn = ({ children, onClick, variant = "neutral" }: { children: ReactNode; onClick: () => void; variant?: Variant; }): JSX.Element => {
     const base =
       "select-none rounded-xl py-3 text-base font-medium shadow-sm active:translate-y-px transition-colors";
-    const styles = {
+    const styles: Record<Variant, string> = {
       neutral: "bg-slate-200 text-slate-900 hover:bg-slate-300",
       op: "bg-slate-300 text-slate-900 hover:bg-slate-400",
       num: "bg-white text-slate-900 hover:bg-slate-100",
@@ -149,14 +151,6 @@ export default function Calculator() {
           📢 <b>Advertising Space Available</b>
           <div className="text-sm opacity-80">Reach verified humans</div>
         </div>
-        <button
-          onClick={() =>
-            alert("Thank you for your support!\\n(Add your crypto address or link here)")
-          }
-          className="w-full bg-emerald-500 text-white py-2 rounded-xl shadow hover:bg-emerald-600"
-        >
-          💖 Support Development (Donate)
-        </button>
       </div>
     </div>
   );
