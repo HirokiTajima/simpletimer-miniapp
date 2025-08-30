@@ -1,158 +1,245 @@
-"use client";
-import { useState, type ReactNode } from "react";
-import { create, all } from "mathjs";
+'use client'
 
-// mathjs (型安全のため evaluate 時だけ any キャストを使用)
-const math = create(all, {});
+import React, { useEffect, useRef, useState } from 'react';
 
-// --- helpers --------------------------------------------------
-function addCommas(numStr: string): string {
-  if (!/^[-+]?\d+(?:\.\d+)?$/.test(numStr)) return numStr;
-  const neg = numStr.startsWith("-");
-  const n = neg ? numStr.slice(1) : numStr;
-  const [i, d] = n.split(".");
-  const withCommas = i.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return (neg ? "-" : "") + withCommas + (d ? "." + d : "");
-}
-function formatExpr(expr: string): string {
-  if (!expr) return "0";
-  if (expr === "Error") return "Error";
-  return expr.replace(/(^|[^A-Za-z0-9_])(-?\d+(?:\.\d+)?)/g, (_: string, pre: string, num: string) => pre + addCommas(num));
-}
-
-export default function Calculator() {
-  const [expr, setExpr] = useState<string>("");
-
-  function evaluateExpression(): void {
-    try {
-      const scope = {
-        ln: (x: number) => Math.log(x),
-        log: (x: number) => Math.log10(x),
-        pi: Math.PI,
-        e: Math.E,
-      } as const;
-      // mathjs の型が複雑なので any キャストで evaluate を呼ぶ
-      const evalMath = math.evaluate as unknown as (expression: string, scope?: Record<string, unknown>) => unknown;
-      const res = evalMath(expr, scope as Record<string, unknown>);
-      setExpr(String(res));
-    } catch {
-      setExpr("Error");
-    }
+declare global {
+  interface Window {
+    webkitAudioContext?: typeof AudioContext;
   }
+}
 
-  const push = (s: string) => setExpr((p) => p + s);
-  const clearAll = () => setExpr("");
-  const backspace = () => setExpr((p) => (p ? p.slice(0, -1) : ""));
+export default function SimpleTimer() {
+  const [setupSec, setSetupSec] = useState<number>(3 * 60);
+  const [remainingSec, setRemainingSec] = useState<number>(setupSec);
+  const [running, setRunning] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [alarming, setAlarming] = useState(false);
+  const endAtRef = useRef<number | null>(null);
+  const tickRef = useRef<number | null>(null);
 
-  const toggleSign = (): void => {
-    setExpr((p) => {
-      const m = /(-?\d+(?:\.\d+)?)\s*$/.exec(p);
-      if (!m) return p || "";
-      const start = m.index;
-      const num = m[1];
-      return p.slice(0, start) + (num.startsWith("-") ? num.slice(1) : "-" + num);
-    });
+  const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
+  const alarmIntervalRef = useRef<number | null>(null);
+
+  const format = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  const percent = (): void => {
-    setExpr((p) => {
-      const m = /(\d+(?:\.\d+)?)\s*$/.exec(p);
-      if (!m) return p || "";
-      const start = m.index;
-      const num = m[1];
-      return p.slice(0, start) + `(${num}/100)`;
-    });
-  };
+  useEffect(() => {
+    if (!running) {
+      setRemainingSec(setupSec);
+      return;
+    }
+  }, [setupSec, running]);
 
-  type Variant = "neutral" | "op" | "num" | "accent" | "warn";
-  const Btn = ({ children, onClick, variant = "neutral" }: { children: ReactNode; onClick: () => void; variant?: Variant; }) => {
-    const base =
-      "select-none rounded-xl py-3 text-base font-medium shadow-sm active:translate-y-px transition-colors";
-    const styles: Record<Variant, string> = {
-      neutral: "bg-slate-200 text-slate-900 hover:bg-slate-300",
-      op: "bg-slate-300 text-slate-900 hover:bg-slate-400",
-      num: "bg-white text-slate-900 hover:bg-slate-100",
-      accent: "bg-indigo-500 text-white hover:bg-indigo-600",
-      warn: "bg-rose-500 text-white hover:bg-rose-600",
+  useEffect(() => {
+    return () => {
+      if (tickRef.current) clearInterval(tickRef.current);
+      stopAlarm();
     };
-    return (
-      <button className={`${base} ${styles[variant]}`} onClick={onClick}>
-        {children}
-      </button>
-    );
+  }, []);
+
+  const ensureAudio = async () => {
+    let ctx = audioCtx;
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+      setAudioCtx(ctx);
+    }
+    if (ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+      } catch {}
+    }
+    return ctx;
   };
+
+  const playBeep = (ctx: AudioContext) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine'; // softer tone
+    osc.frequency.setValueAtTime(1200, ctx.currentTime);
+
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.4, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.08);
+
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.1);
+  };
+
+  const playAlarm = async () => {
+    const ctx = await ensureAudio();
+    if (!ctx) return;
+
+    setAlarming(true);
+
+    alarmIntervalRef.current = window.setInterval(() => {
+      playBeep(ctx);
+    }, 100); // very short interval for continuous beeps
+  };
+
+  const stopAlarm = () => {
+    if (alarmIntervalRef.current) {
+      clearInterval(alarmIntervalRef.current);
+      alarmIntervalRef.current = null;
+    }
+    setAlarming(false);
+  };
+
+  const start = async () => {
+    if (setupSec <= 0) return;
+    await ensureAudio();
+    setRunning(true);
+    setPaused(false);
+    const endAt = Date.now() + remainingSec * 1000;
+    endAtRef.current = endAt;
+
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = window.setInterval(() => {
+      if (!endAtRef.current) return;
+      const leftMs = Math.max(0, endAtRef.current - Date.now());
+      const left = Math.round(leftMs / 1000);
+      setRemainingSec(left);
+      if (left <= 0) {
+        clearInterval(tickRef.current!);
+        endAtRef.current = null;
+        setRunning(false);
+        setPaused(false);
+        playAlarm();
+      }
+    }, 200);
+  };
+
+  const pause = () => {
+    if (!running) return;
+    setPaused(true);
+    setRunning(false);
+    if (endAtRef.current) {
+      const leftMs = Math.max(0, endAtRef.current - Date.now());
+      setRemainingSec(Math.round(leftMs / 1000));
+    }
+    endAtRef.current = null;
+    if (tickRef.current) clearInterval(tickRef.current);
+  };
+
+  const resume = () => {
+    if (!paused) return;
+    setRunning(true);
+    setPaused(false);
+    const endAt = Date.now() + remainingSec * 1000;
+    endAtRef.current = endAt;
+
+    if (tickRef.current) clearInterval(tickRef.current);
+    tickRef.current = window.setInterval(() => {
+      if (!endAtRef.current) return;
+      const leftMs = Math.max(0, endAtRef.current - Date.now());
+      const left = Math.round(leftMs / 1000);
+      setRemainingSec(left);
+      if (left <= 0) {
+        clearInterval(tickRef.current!);
+        endAtRef.current = null;
+        setRunning(false);
+        setPaused(false);
+        playAlarm();
+      }
+    }, 200);
+  };
+
+  const reset = () => {
+    setRunning(false);
+    setPaused(false);
+    endAtRef.current = null;
+    if (tickRef.current) clearInterval(tickRef.current);
+    setRemainingSec(setupSec);
+    stopAlarm();
+  };
+
+  const adjust = (delta: number) => {
+    if (running) return;
+    const next = Math.max(0, Math.min(12 * 3600, setupSec + delta));
+    setSetupSec(next);
+    setRemainingSec(next);
+  };
+
+  const setPreset = (min: number) => {
+    if (running) return;
+    const s = Math.max(0, Math.min(12 * 3600, min * 60));
+    setSetupSec(s);
+    setRemainingSec(s);
+  };
+
+  const displaySec = running || paused ? remainingSec : setupSec;
+  const mm = Math.floor(displaySec / 60);
+  const ss = displaySec % 60;
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col items-center gap-4 py-6 px-4">
-      <div className="w-full max-w-sm rounded-3xl bg-white shadow-xl p-4">
-        <div className="h-16 w-full rounded-2xl bg-slate-900 text-white flex items-center justify-end px-4 text-2xl font-mono overflow-x-auto">
-          {formatExpr(expr)}
-        </div>
+    <div className="min-h-screen flex flex-col items-center justify-between bg-black text-white px-6 py-6">
+      <header className="mt-2">
+        <h1 className="text-2xl font-bold tracking-wide">SimpleTimer</h1>
+      </header>
 
-        {/* Row 1: trig & logs */}
-        <div className="grid grid-cols-5 gap-2 mt-3">
-          <Btn variant="op" onClick={() => push("sin(")}>sin</Btn>
-          <Btn variant="op" onClick={() => push("cos(")}>cos</Btn>
-          <Btn variant="op" onClick={() => push("tan(")}>tan</Btn>
-          <Btn variant="op" onClick={() => push("log(")}>log</Btn>
-          <Btn variant="op" onClick={() => push("ln(")}>ln</Btn>
-        </div>
+      <main className="w-full max-w-md flex flex-col items-center">
+        <div className="w-full rounded-2xl bg-zinc-900 p-6 shadow-lg flex flex-col items-center">
+          <div className="text-[64px] leading-none font-mono tabular-nums select-none">
+            {String(mm).padStart(2, '0')}
+            <span className="opacity-60">:</span>
+            {String(ss).padStart(2, '0')}
+          </div>
 
-        {/* Row 2: constants & power & sqrt & factorial */}
-        <div className="grid grid-cols-5 gap-2 mt-2">
-          <Btn variant="op" onClick={() => push("e")}>e</Btn>
-          <Btn variant="op" onClick={() => push("pi")}>π</Btn>
-          <Btn variant="op" onClick={() => push("!")}>x!</Btn>
-          <Btn variant="op" onClick={() => push("^")}>xʸ</Btn>
-          <Btn variant="op" onClick={() => push("sqrt(")}>√</Btn>
-        </div>
+          <div className="mt-4 grid grid-cols-4 gap-2 w-full">
+            <button onClick={() => adjust(-60)} disabled={running} className="btn">-1m</button>
+            <button onClick={() => adjust(-10)} disabled={running} className="btn">-10s</button>
+            <button onClick={() => adjust(10)} disabled={running} className="btn">+10s</button>
+            <button onClick={() => adjust(60)} disabled={running} className="btn">+1m</button>
+          </div>
 
-        {/* Row 3: AC, (, ), ±, % */}
-        <div className="grid grid-cols-5 gap-2 mt-2">
-          <Btn variant="warn" onClick={clearAll}>AC</Btn>
-          <Btn variant="op" onClick={() => push("(")}> ( </Btn>
-          <Btn variant="op" onClick={() => push(")")}> ) </Btn>
-          <Btn variant="accent" onClick={toggleSign}>±</Btn>
-          <Btn variant="accent" onClick={percent}>%</Btn>
-        </div>
+          <div className="mt-3 flex flex-wrap gap-2 justify-center">
+            {[1, 3, 5, 10, 25].map((m) => (
+              <button key={m} onClick={() => setPreset(m)} disabled={running} className="chip">{m}m</button>
+            ))}
+          </div>
 
-        {/* Numbers and ops */}
-        <div className="grid grid-cols-4 gap-2 mt-2">
-          <Btn variant="num" onClick={() => push("7")}>7</Btn>
-          <Btn variant="num" onClick={() => push("8")}>8</Btn>
-          <Btn variant="num" onClick={() => push("9")}>9</Btn>
-          <Btn variant="accent" onClick={() => push("/")}>÷</Btn>
+          <div className="mt-5 flex gap-3">
+            {!running && !paused && (<button onClick={start} className="primary">Start</button>)}
+            {running && (<button onClick={pause} className="secondary">Pause</button>)}
+            {!running && paused && (<button onClick={resume} className="primary">Resume</button>)}
+            <button onClick={reset} className="ghost">Reset</button>
+            {alarming && (<button onClick={stopAlarm} className="ghost">Stop</button>)}
+          </div>
         </div>
-        <div className="grid grid-cols-4 gap-2 mt-2">
-          <Btn variant="num" onClick={() => push("4")}>4</Btn>
-          <Btn variant="num" onClick={() => push("5")}>5</Btn>
-          <Btn variant="num" onClick={() => push("6")}>6</Btn>
-          <Btn variant="accent" onClick={() => push("*")}>×</Btn>
-        </div>
-        <div className="grid grid-cols-4 gap-2 mt-2">
-          <Btn variant="num" onClick={() => push("1")}>1</Btn>
-          <Btn variant="num" onClick={() => push("2")}>2</Btn>
-          <Btn variant="num" onClick={() => push("3")}>3</Btn>
-          <Btn variant="accent" onClick={() => push("-")}>−</Btn>
-        </div>
-        <div className="grid grid-cols-4 gap-2 mt-2">
-          <Btn variant="num" onClick={() => push("0")}>0</Btn>
-          <Btn variant="num" onClick={() => push(".")}>.</Btn>
-          <Btn variant="accent" onClick={backspace}>C</Btn>
-          <Btn variant="accent" onClick={() => push("+")}>＋</Btn>
-        </div>
-        <div className="grid grid-cols-1 gap-2 mt-2">
-          <Btn variant="accent" onClick={evaluateExpression}>=</Btn>
-        </div>
-      </div>
+      </main>
 
-      {/* Ad & Donate area */}
-      <div className="w-full max-w-sm space-y-2">
-        <div className="bg-amber-100 border border-amber-200 text-amber-900 text-center p-3 rounded-xl">
-          📢 <b>Advertising Space Available</b>
-          <div className="text-sm opacity-80">Reach verified humans</div>
-        </div>
-      </div>
+      {/* Ad banner (placeholder) */}
+      <footer className="w-full max-w-md mt-6">
+        <button type="button" className="adbar w-full flex items-center gap-3 rounded-xl px-4 py-3 border" aria-label="Ad banner">
+          <span className="adicon" aria-hidden>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M3 10h2l7-4v12l-7-4H3V10zm16 2a3 3 0 0 1-2.83 2.995L16 15h-1v-6h1a3 3 0 0 1 3 3z"/>
+            </svg>
+          </span>
+          <div className="flex flex-col text-left">
+            <span className="text-sm font-semibold leading-none">Advertising Space Available</span>
+            <span className="text-xs opacity-80 leading-none mt-1">Reach verified humans</span>
+          </div>
+        </button>
+      </footer>
+
+      <style jsx>{`
+        .btn { border-radius: 1rem; padding: 0.6rem 0.5rem; background: #18181b; border: 1px solid #27272a; font-weight: 600; }
+        .btn:disabled { opacity: 0.4 }
+        .chip { padding: 0.4rem 0.8rem; border-radius: 999px; background: #0a0a0a; border: 1px solid #27272a; font-weight: 600; font-size: 0.9rem; }
+        .primary { background: white; color: black; border-radius: 999px; font-weight: 800; padding: 0.7rem 1.2rem; }
+        .secondary { background: #e5e7eb; color: #000; border-radius: 999px; font-weight: 800; padding: 0.7rem 1.2rem; }
+        .ghost { border-radius: 999px; padding: 0.6rem 1rem; border: 1px solid #27272a; }
+
+        .adbar { background: #FEF3C7; color: #92400E; border-color: #FCD34D; box-shadow: 0 1px 0 rgba(0,0,0,0.02) inset; }
+        .adicon { display: inline-flex; align-items: center; justify-content: center; background: #FDE68A; color: #92400E; border-radius: 999px; width: 28px; height: 28px; }
+      `}</style>
     </div>
   );
 }
+
